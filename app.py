@@ -54,6 +54,27 @@ def setup_selenium():
     driver = webdriver.Chrome(options=options)
     return driver
 
+from selenium.common.exceptions import NoSuchElementException
+from transformers import pipeline
+
+# Initialize the summarization pipeline
+summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+
+def _format_table_as_markdown(table_data):
+    if not table_data:
+        return ""
+
+    markdown_table = []
+    # Add header row
+    header = table_data[0]
+    markdown_table.append(" | ".join(header))
+    # Add separator row
+    markdown_table.append(" | ".join([str("-" * len(col)) for col in header]))
+    # Add data rows
+    for row in table_data[1:]:
+        markdown_table.append(" | ".join(row))
+    return "\n".join(markdown_table)
+
 # Define the scraping function using Selenium
 def scrape_with_selenium(url):
     driver = setup_selenium()
@@ -62,6 +83,9 @@ def scrape_with_selenium(url):
     # Wait for the page to load completely (adjust time if needed)
     time.sleep(3)  # or use WebDriverWait for more dynamic behavior
     
+    # A rough estimate: 1 token ~ 4 characters
+    max_chars = 4000 # 1024 tokens * 4 chars/token
+
     # Extract the page title
     title = driver.title
 
@@ -77,22 +101,54 @@ def scrape_with_selenium(url):
     except NoSuchElementException:
         image_url = "No image found"
 
-    # Extract the article text from all paragraph tags
-    paragraphs = driver.find_elements(By.TAG_NAME, 'p')
-    article_text = "\n".join([p.text for p in paragraphs])
+    # Extract the article text from all paragraph tags, excluding footer content
+    all_paragraphs = driver.find_elements(By.TAG_NAME, 'p')
+    article_paragraphs = []
+    for p in all_paragraphs:
+        # Execute JavaScript to check if the paragraph is inside a footer
+        is_in_footer = driver.execute_script("""
+            let element = arguments[0];
+            while (element) {
+                if (element.tagName.toLowerCase() === 'footer') {
+                    return true;
+                }
+                element = element.parentElement;
+            }
+            return false;
+        """, p)
+        if not is_in_footer:
+            article_paragraphs.append(p.text)
+    article_text = "\n".join(article_paragraphs)
 
-    # Extract tables
+    # Extract tables and format as Markdown
     tables_data = []
     tables = driver.find_elements(By.TAG_NAME, 'table')
-    for table in tables:
+    for i, table in enumerate(tables):
         table_rows = table.find_elements(By.TAG_NAME, 'tr')
-        current_table = []
+        current_table_data = []
         for row in table_rows:
             row_data = [cell.text for cell in row.find_elements(By.TAG_NAME, 'td')]
             if not row_data:
                 row_data = [cell.text for cell in row.find_elements(By.TAG_NAME, 'th')]
-            current_table.append(row_data)
-        tables_data.append(current_table)
+            current_table_data.append(row_data)
+        
+        markdown_table = _format_table_as_markdown(current_table_data)
+        tables_data.append({"data": current_table_data, "markdown_table": markdown_table})
+
+    # Generate abstract summarization for the article
+    text_to_summarize = f"{title}. {heading}. {article_text}"
+    # Truncate text if it's too long for the model (max 1024 tokens * 4 chars/token)
+    if len(text_to_summarize) > max_chars:
+        text_to_summarize = text_to_summarize[:max_chars]
+
+    article_summary = summarizer(text_to_summarize, max_length=1000, min_length=5000, do_sample=False)[0]['summary_text']
+
+    # Collect all summaries and markdown tables
+    combined_summary_parts = [article_summary]
+    for i, table_info in enumerate(tables_data):
+        combined_summary_parts.append(f"\n\nTable {i+1}:\n{table_info['markdown_table']}")
+
+    combined_summary = " ".join(combined_summary_parts)
 
     driver.quit()
     
@@ -102,7 +158,8 @@ def scrape_with_selenium(url):
         "heading": heading,
         "image_url": image_url,
         "article_text": article_text,
-        "tables": tables_data
+        "tables": tables_data,
+        "combined_summary": combined_summary
     }
 
 @app.get("/news_scrape")
@@ -125,3 +182,4 @@ def news_scrape_endpoint(q: str):
             raise HTTPException(status_code=404, detail="No news found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
