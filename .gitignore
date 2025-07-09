@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+
+# Virtual environment
+venv/
+
+# Environment variables
+.env
+
+
+# Editors
+.vscode/
+
+# Specific to this project
+scraped_output.json
+*.log
