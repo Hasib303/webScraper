@@ -141,7 +141,7 @@ def scrape_with_selenium(url):
     if len(text_to_summarize) > max_chars:
         text_to_summarize = text_to_summarize[:max_chars]
 
-    article_summary = summarizer(text_to_summarize, max_length=1000, min_length=5000, do_sample=False)[0]['summary_text']
+    article_summary = summarizer(text_to_summarize, max_length=1000, min_length=500, do_sample=False)[0]['summary_text']
 
     # Collect all summaries and markdown tables
     combined_summary_parts = [article_summary]
